@@ -1,0 +1,64 @@
+
+
+#define CMSG_ALIGN(len)  ( ((len)+sizeof(long)-1) & ~(sizeof(long)-1) ) 
+
+
+1. Issue Description:
+=============================================================================================
+In Server side, msg_controllen in msghdr is set to 20 bytes, but in client 
+side msg_controllen was set to 24 bytes while cmsg received.
+
+if CMSG_LEN(CMSG_ALIGN(len)) used for both client and server, then the issue will be fixed.
+looks like named-pipe socket stream requires msg control be aligned to 8 Byste(64bits)..
+
+test env: 
+- ubuntu 14.04 on IA-64 arch, kernel 3.16.0
+
+2. Errata from APUE Book:
+=============================================================================================
+Figure 17.14 exposes a bug in most 64-bit versions of Linux that results in msg_controllen 
+    being updated improperly. To work around the problem, change
+        if (msg.msg_controllen != CONTROLLEN)
+    to
+        if (msg.msg_controllen < CONTROLLEN)
+    The same problem affects lib/recvfd.c in the source code for the APUE library.
+
+
+3. Callstack for the message sendmsg and recvmsg from kernel.
+==============================================================================================
+sendmsg
+...
+sock_sendmsg
+...
+unix_stream_sendmsg (AF_unix.c)
+    
+
+
+current guess:
+@@ send side:
+ghdr_from_user_compat_to_kern --->
+kmsg->msg_controllen = kcmlen; --->
+kcmlen += tmp;--->
+tmp = CMSG_ALIGN(tmp);
+                
+@@ receive side:
+scm_detach_fds --->
+msg->msg_controllen -= cmlen;--->
+int cmlen = CMSG_LEN(i*sizeof(int));--->i always equals to be aligned 2 for(single fp, 20->
+
+
+4. The explanation from man page of cmsg
+==============================================================================================
+Man page of kernel 3.16.
+To create ancillary data, first initialize the msg_controllen member of the msghdr with the length of the con
+trol  message buffer.  Use CMSG_FIRSTHDR() on the msghdr to get the first control message and CMSG_NXTHDR() to
+get all subsequent ones.  In each control message, initialize cmsg_len (with CMSG_LEN()),  the  other  cmsghdr
+header fields, and the data portion using CMSG_DATA().  Finally, the msg_controllen field of the msghdr should
+be set to the sum of the CMSG_SPACE() of the length of all control messages in the buffer.  For more  informa‐
+tion on the msghdr, see recvmsg(2).
+
+5. Compare author's kernel version and mine.
+==============================================================================================
+my Kernel 3.16.y: CMSG_SPACE provided
+author's 3.2.y: CMSG_SPACE provided.
+https://git.kernel.org/cgit/linux/kernel/git/stable/linux-stable.git/tree/include/linux/socket.h?h=linux-3.2.y
